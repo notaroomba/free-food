@@ -174,7 +174,9 @@ test('http: healthz open, ingest needs token, events served as JSON', async () =
     assert.equal(ev[0].message_id, undefined);
     assert.match(await (await fetch(`${base}/calendar.ics`)).text(), /BEGIN:VEVENT/);
     const home = await fetch(`${base}/`);
-    assert.match(await home.text(), /Free Foods @ MIT/);
+    const html = await home.text();
+    assert.match(html, /Free Foods @ MIT/);
+    assert.match(html, /app\.js\?v=[0-9a-f]+/); // versioned so Cloudflare's edge cache never serves a stale build
     assert.match(home.headers.get('content-security-policy') || '', /default-src 'none'/);
     assert.equal((await fetch(`${base}/style.css`)).headers.get('content-type'), 'text/css; charset=utf-8');
     assert.equal((await fetch(`${base}/icons/pizza.svg`)).status, 200);

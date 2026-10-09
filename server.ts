@@ -16,6 +16,7 @@ const SECRET = process.env.SESSION_SECRET || randomBytes(32).toString('hex');
 if (OIDC && !process.env.SESSION_SECRET) console.warn('SESSION_SECRET unset: sessions reset on every deploy');
 const PUBLIC_DIR = new URL('./public/', import.meta.url);
 const STATIC = /^\/(index\.html|app\.js|style\.css|icons\/[\w-]+\.svg)$/; // app.js is built by `npm run build` (tsc)
+const VERSION = (process.env.RAILWAY_GIT_COMMIT_SHA || String(Date.now())).slice(0, 12); // cache-buster for ?v= in index.html
 const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' };
 
 // --- tiny signed-cookie sessions (stdlib only) ---
@@ -78,7 +79,7 @@ const HTTPS = PUBLIC_URL.startsWith('https');
 const SECURITY_HEADERS = {
   'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer',
   'permissions-policy': 'camera=(), microphone=(), geolocation=()',
-  'content-security-policy': "default-src 'none'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+  'content-security-policy': "default-src 'none'; script-src 'self' https://cdn.jsdelivr.net https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
   ...(HTTPS ? { 'strict-transport-security': 'max-age=31536000; includeSubDomains' } : {}),
 };
 const send = (res: ServerResponse, code: number, body: string, type = 'text/plain; charset=utf-8') => { res.writeHead(code, { 'content-type': type, ...SECURITY_HEADERS }); res.end(body); };
@@ -86,8 +87,9 @@ const json = (res: ServerResponse, obj: unknown) => send(res, 200, JSON.stringif
 function serveStatic(res: ServerResponse, p: string) {
   const rel = p.slice(1), type = TYPES[extname(rel)];
   try {
-    const data = readFileSync(new URL(rel, PUBLIC_DIR));
-    res.writeHead(200, { 'content-type': type, 'cache-control': rel.endsWith('.html') ? 'no-cache' : 'public, max-age=600', ...SECURITY_HEADERS });
+    let data: Buffer | string = readFileSync(new URL(rel, PUBLIC_DIR));
+    if (rel === 'index.html') data = data.toString().replaceAll('__V__', VERSION);
+    res.writeHead(200, { 'content-type': type, 'cache-control': 'no-cache', ...SECURITY_HEADERS }); // tiny files; a stale app.js/style.css after a deploy is worse than a revalidation
     res.end(data);
   } catch { send(res, 404, rel === 'app.js' ? 'run `npm run build`' : 'not found'); }
 }
