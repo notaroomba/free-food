@@ -115,6 +115,17 @@ function allow(key: string, max: number, windowMs: number): boolean {
 }
 const clientIp = (req: IncomingMessage) => String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || '?';
 
+/** RFC 5545 line folding: at most 75 octets per line, continuation lines start with a space (split on character boundaries). */
+function fold(line: string): string {
+  const out: string[] = []; let cur = '', bytes = 0;
+  for (const ch of line) {
+    const b = Buffer.byteLength(ch);
+    if (bytes + b > (out.length ? 74 : 75)) { out.push(cur); cur = ' '; bytes = 1; }
+    cur += ch; bytes += b;
+  }
+  out.push(cur);
+  return out.join('\r\n');
+}
 const icsDate = (iso: string) => new Date(iso).toISOString().replace(/[-:]|\.\d{3}/g, '');
 const icsEsc = (s: string | null | undefined) => String(s || '').replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r\n|[\r\n]/g, '\\n').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
 export function toICS(events: PublicEvent[], host = 'free-foods'): string {
@@ -130,7 +141,7 @@ export function toICS(events: PublicEvent[], host = 'free-foods'): string {
       e.cancelled ? 'STATUS:CANCELLED' : 'STATUS:CONFIRMED', 'END:VEVENT');
   }
   lines.push('END:VCALENDAR');
-  return lines.join('\r\n') + '\r\n'; // ponytail: no 75-octet line folding; Google/Apple accept it
+  return lines.map(fold).join('\r\n') + '\r\n';
 }
 
 // --- routes ---
@@ -182,7 +193,8 @@ export async function handle(req: IncomingMessage, res: ServerResponse): Promise
   if (p === '/api/me') {
     const ics = `${PUBLIC_URL}/calendar.ics${OIDC && process.env.ICS_TOKEN ? `?token=${process.env.ICS_TOKEN}` : ''}`;
     const webcal = ics.replace(/^https?:/, 'webcal:'); // Apple Calendar / Outlook subscribe (auto-refreshing) instead of a one-off import
-    return json(res, { email: u.email, name: u.name, auth: !!OIDC, ics, webcal, gcal: `https://calendar.google.com/calendar/r?cid=${encodeURIComponent(ics)}` });
+    // Google's add-by-URL deep link is undocumented; the webcal:// form is the one that works most reliably
+    return json(res, { email: u.email, name: u.name, auth: !!OIDC, ics, webcal, gcal: `https://calendar.google.com/calendar/r?cid=${encodeURIComponent(webcal)}` });
   }
   send(res, 404, 'not found');
 }

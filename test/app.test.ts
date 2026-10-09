@@ -170,6 +170,9 @@ test('toICS: valid skeleton, UTC stamps, escaped commas', () => {
   assert.match(ics, /DTSTART:20261009T220000Z/);
   assert.match(ics, /DTEND:20261009T230000Z/); // default 1h
   assert.match(ics, /SUMMARY:Pizza\\, boba/);
+  const long = toICS([{ id: 8, title: 'x'.repeat(200), start_at: '2026-10-09T22:00:00.000Z', end_at: null, location: null, updated_at: '2026-10-08 18:00:00', sender: null, cancelled: 0, food: null, host: null, notes: 'é'.repeat(100), leftovers: 0, confidence: 1, subject: 's', source: 'list' }]);
+  assert.ok(long.split('\r\n').every(l => Buffer.byteLength(l) <= 75), 'folded');
+  assert.match(long.replace(/\r\n /g, ''), new RegExp('SUMMARY:' + 'x'.repeat(200))); // unfolding restores the line
   assert.match(ics, /END:VCALENDAR\r\n$/);
 });
 
@@ -200,7 +203,8 @@ test('http: healthz open, ingest needs token, events served as JSON', async () =
     assert.doesNotMatch(ics, /old pizza/); // past events are not in the feed
     const me = (await (await fetch(`${base}/api/me`)).json()) as { webcal: string; gcal: string; ics: string };
     assert.equal(me.webcal, 'webcal://localhost/calendar.ics');
-    assert.match(me.gcal, /^https:\/\/calendar\.google\.com\/calendar\/r\?cid=http/);
+    assert.match(me.gcal, /^https:\/\/calendar\.google\.com\/calendar\/r\?cid=webcal%3A%2F%2F/);
+    assert.ok(ics.split('\r\n').every(l => Buffer.byteLength(l) <= 75), 'lines folded to 75 octets');
     const home = await fetch(`${base}/`);
     const html = await home.text();
     assert.match(html, /Free Foods @ MIT/);
