@@ -195,10 +195,16 @@ button:disabled { color: var(--sh); text-shadow: 1px 1px 0 var(--hl); cursor: de
 .fc .fc-daygrid-day.fc-day-today .fc-daygrid-day-number { background: var(--title1); color: #fff; }
 .fc .fc-event { border-radius: 0; border: 1px solid #000; box-shadow: 1px 1px 0 #000; cursor: pointer; }
 .fc .fc-daygrid-event { padding: 1px 3px; }
-.fc .fc-event.now { background: #ff8000; }
-.fc .fc-event.scheduled { background: #008000; }
-.fc .fc-event.cancelled { background: #808080; text-decoration: line-through; }
+.fc .fc-event.now { border-left: 5px solid #ff8000; } /* colour = source (set in app.ts); the orange edge means it is out right now */
+.fc .fc-event.cancelled { text-decoration: line-through; }
 .fc .fc-event.low { opacity: .7; }
+.fc .fc-list-event.now .fc-list-event-dot { border-color: #ff8000 !important; }
+.tb-btn.filter.src-dormspam::before, .tb-btn.filter.src-list::before { content: ''; display: inline-block; width: 9px; height: 9px; margin-right: 5px; border: 1px solid #000; vertical-align: -1px; }
+.tb-btn.filter.src-dormspam::before { background: #008000; }
+.tb-btn.filter.src-list::before { background: #000080; }
+.legend .swatch { display: inline-block; width: 11px; height: 11px; border: 1px solid #000; vertical-align: -1px; }
+.legend .swatch.dormspam { background: #008000; } .legend .swatch.list { background: #000080; }
+.legend .swatch.now { background: #fff; border-left: 4px solid #ff8000; } .legend .swatch.cancelled { background: #808080; }
 .fc .fc-list-day-cushion { background: var(--face); }
 .fc .fc-list-event-dot { border-radius: 0; }
 .fc .fc-popover { border: 2px solid; border-color: var(--hl) var(--dksh) var(--dksh) var(--hl); border-radius: 0; box-shadow: 2px 2px 6px rgba(0,0,0,.35); }
@@ -385,9 +391,24 @@ button:disabled { color: var(--sh); text-shadow: 1px 1px 0 var(--hl); cursor: de
 .start-menu .items img { width: 20px; height: 20px; image-rendering: pixelated; }
 .start-menu hr { border: none; border-top: 1px solid var(--sh); border-bottom: 1px solid var(--hl); margin: 3px 2px; }
 
+/* phones: every window fills the screen, bigger type and touch targets, two-row toolbar */
 @media (max-width: 700px) {
-  .app-window { left: 0 !important; top: 0 !important; width: 100vw !important; height: calc(100vh - 36px) !important; }
-  .resize-grip, .menu .shortcut { display: none; }
-  .toolbar .view-title { font-size: 11px; }
+  body { font-size: 14px; -webkit-text-size-adjust: 100%; }
+  button, .menu, .now-list li, .desktop-icon { touch-action: manipulation; }
+  .app-window { left: 0 !important; top: 0 !important; width: 100vw !important; height: calc(100vh - 36px) !important; height: calc(100dvh - 36px) !important; min-width: 0; }
+  .resize-grip, .menu .shortcut, .toolbar .sep, [data-view="timeGridWeek"] { display: none; }
+  .toolbar { flex-wrap: wrap; row-gap: 4px; }
+  .toolbar .spacer { display: none; }
+  .toolbar .view-title { width: 100%; font-size: 13px; padding: 0 2px; }
+  .tb-btn { height: 32px; min-width: 32px; padding: 0 9px; font-size: 13px; }
+  .titlebar-buttons button { width: 24px; height: 22px; font-size: 12px; }
+  .menu { padding: 6px 9px; }
+  .statusbar > span:not(:first-child) { display: none; }
+  .fc { font-size: 13px; }
+  .fc .fc-list-event-time { white-space: normal; }
+  .now-list li { padding: 10px 8px; }
+  .dialog-body dl { grid-template-columns: 1fr; }
+  .dialog-body dt { font-weight: bold; }
   .task-btn { min-width: 0; }
+  .start-menu { width: min(260px, 90vw); }
 }

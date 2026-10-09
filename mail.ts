@@ -1,10 +1,33 @@
-import { simpleParser, type ParsedMail } from 'mailparser';
+import { simpleParser, type ParsedMail, type Attachment } from 'mailparser';
 import { ImapFlow } from 'imapflow';
+import sharp from 'sharp';
 import { seenMessage, saveMessage, upsertEvent, replaceThread, kvGet, kvSet } from './db.ts';
 import { prefilter, extract, type Mail, type Extraction, type ImageType } from './extract.ts';
 
-const IMAGE_TYPES = new Set<string>(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
-const MAX_IMAGE = 7.5e6, MAX_PDF = 20e6, BUDGET = 22e6; // API limits: 10 MB/image base64, 32 MB/request (22 MB raw ≈ 29 MB base64)
+const MAX_IMAGE = 20e6, MAX_PDF = 20e6, BUDGET = 22e6; // attachments up to 20 MB are accepted; images are shrunk below, PDFs go as-is (API: 32 MB/request)
+const MAX_PX = 2000, SMALL = 3e6; // the API downsizes to ~1568 px anyway and rejects >8000 px or >10 MB base64, so shrink anything big first
+
+/** Real image type from the first bytes; mail clients lie in Content-Type (a PNG labelled image/jpeg is rejected by the API). */
+export function sniffImage(b: Buffer): ImageType | null {
+  if (b.length < 12) return null;
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'image/png';
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
+  if (b.subarray(0, 4).toString('latin1') === 'GIF8') return 'image/gif';
+  if (b.subarray(0, 4).toString('latin1') === 'RIFF' && b.subarray(8, 12).toString('latin1') === 'WEBP') return 'image/webp';
+  return null;
+}
+
+/** Image attachment -> API-ready block: small images pass through, big ones are resized to <= MAX_PX JPEG; undecodable ones are dropped. */
+export async function prepImage(a: Pick<Attachment, 'content' | 'contentType' | 'size'>): Promise<{ media_type: ImageType; data: string; size: number } | null> {
+  const type = sniffImage(a.content);
+  if (!type && !a.contentType.startsWith('image/')) return null;
+  try {
+    const meta = await sharp(a.content).metadata();
+    if (type && a.size <= SMALL && (meta.width ?? 0) <= MAX_PX && (meta.height ?? 0) <= MAX_PX) return { media_type: type, data: a.content.toString('base64'), size: a.size };
+    const buf = await sharp(a.content).rotate().resize({ width: MAX_PX, height: MAX_PX, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer();
+    return { media_type: 'image/jpeg', data: buf.toString('base64'), size: buf.length };
+  } catch { return null; } // HEIC, corrupt data, SVG, etc.
+}
 const TEXT_TYPES = /^text\/(plain|calendar|markdown|csv)$/;
 const LIST_HEADERS = new Set(['list-id', 'list-post', 'delivered-to', 'x-original-to', 'envelope-to']);
 
@@ -14,11 +37,11 @@ export async function parseAll(buf: Buffer | string, depth = 0): Promise<Mail[]>
   const m = await simpleParser(buf);
   const inner = m.attachments.filter(a => a.contentType === 'message/rfc822');
   if (inner.length && depth < 3) return (await Promise.all(inner.map(a => parseAll(a.content, depth + 1)))).flat();
-  return [toMail(m)];
+  return [await toMail(m)];
 }
 export const parseRaw = async (buf: Buffer | string): Promise<Mail> => (await parseAll(buf))[0];
 
-function toMail(m: ParsedMail): Mail {
+async function toMail(m: ParsedMail): Promise<Mail> {
   // mailparser derives text from HTML itself; this bounded fallback only covers bodies it refused to convert
   let text = m.text || (m.html && m.html.length < 2e5 ? m.html.replace(/<[^>]*>/g, ' ') : '');
   for (const a of m.attachments.filter(a => TEXT_TYPES.test(a.contentType) && a.size <= 50e3)) // .ics invites, .txt flyers: read them too
@@ -29,14 +52,14 @@ function toMail(m: ParsedMail): Mail {
   ].join(' ').toLowerCase();
   let used = 0;
   const fits = (a: { size: number }) => (used + a.size <= BUDGET) && (used += a.size, true);
+  const prepared = await Promise.all(m.attachments.filter(a => a.size <= MAX_IMAGE && a.contentType !== 'application/pdf').map(prepImage));
+  const images = prepared.filter((p): p is NonNullable<typeof p> => !!p).slice(0, 8).filter(fits).map(({ media_type, data }) => ({ media_type, data }));
   return {
     id: m.messageId || `no-id-${Date.now()}-${Math.random()}`,
     from: m.from?.text ?? '',
     subject: m.subject ?? '',
     date: m.date ?? new Date(),
-    text, recipients,
-    images: m.attachments.filter(a => IMAGE_TYPES.has(a.contentType) && a.size <= MAX_IMAGE).slice(0, 8).filter(fits)
-      .map(a => ({ media_type: a.contentType as ImageType, data: a.content.toString('base64') })),
+    text, recipients, images,
     pdfs: m.attachments.filter(a => a.contentType === 'application/pdf' && a.size <= MAX_PDF).slice(0, 2).filter(fits)
       .map(a => ({ data: a.content.toString('base64') })),
   };
@@ -117,7 +140,7 @@ async function processOne(mail: Mail, deps: Deps = { extract }): Promise<Process
   if (events.length) replaceThread(tk, mail.id);
   for (const ev of events) {
     upsertEvent({
-      dedupKey: dedupKey(ev), messageId: mail.id, threadKey: tk, title: ev.title, food: ev.food || null,
+      dedupKey: dedupKey(ev), messageId: mail.id, threadKey: tk, source: src, title: ev.title, food: ev.food || null,
       startAt: new Date(ev.start).toISOString(), endAt: ev.end && !Number.isNaN(Date.parse(ev.end)) ? new Date(ev.end).toISOString() : null,
       location: ev.location || null, host: ev.host || null, notes: ev.notes || null,
       leftovers: ev.leftovers_now, confidence: ev.confidence, cancelled: ev.cancelled,

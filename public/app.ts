@@ -5,16 +5,20 @@ declare const FullCalendar: any; // global build from the CDN
 interface Ev {
   id: number; title: string; start_at: string; end_at: string | null; location: string | null; food: string | null;
   host: string | null; notes: string | null; sender: string | null; subject: string | null;
-  leftovers: number; cancelled: number; confidence: number | null;
+  leftovers: number; cancelled: number; confidence: number | null; source: 'dormspam' | 'list' | 'other' | null;
 }
+type Filter = 'all' | 'dormspam' | 'list';
+let filter: Filter = (localStorage.getItem('ff-filter') as Filter) || 'all';
+const passes = (e: Ev) => filter === 'all' || (e.source || 'dormspam') === filter;
 interface Me { email: string; name?: string; auth: boolean; ics: string }
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const all = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode = document) => [...root.querySelectorAll<T>(sel)];
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
 const fmt = (d: string, o: Intl.DateTimeFormatOptions) => new Date(d).toLocaleString([], o);
-const COLOR = { now: '#ff8000', scheduled: '#008000', cancelled: '#808080' };
-const kind = (e: Ev): keyof typeof COLOR => e.cancelled ? 'cancelled' : e.leftovers ? 'now' : 'scheduled';
+const COLOR = { dormspam: '#008000', list: '#000080', other: '#008000', cancelled: '#808080' }; // colour says where it came from
+const color = (e: Ev) => e.cancelled ? COLOR.cancelled : COLOR[e.source || 'dormspam'];
+const classes = (e: Ev) => [e.leftovers ? 'now' : '', e.cancelled ? 'cancelled' : '', (e.confidence ?? 1) < 0.6 ? 'low' : '', `src-${e.source || 'dormspam'}`];
 const mobile = () => innerWidth < 700;
 
 // ---------- window manager ----------
@@ -116,9 +120,10 @@ document.addEventListener('click', (e) => {
   if (!t.closest('.menu')) closeMenus();
 });
 document.addEventListener('click', (e) => {
-  const t = (e.target as HTMLElement).closest<HTMLElement>('[data-app-open],[data-win-close],[data-action],[data-view]');
+  const t = (e.target as HTMLElement).closest<HTMLElement>('[data-app-open],[data-win-close],[data-action],[data-view],[data-filter]');
   if (!t) return;
   closeMenus(); toggleStart(false);
+  if (t.dataset.filter) { filter = t.dataset.filter as Filter; try { localStorage.setItem('ff-filter', filter); } catch {} syncFilterButtons(); cal.refetchEvents(); loadNow(); }
   if (t.dataset.appOpen) openApp(t.dataset.appOpen);
   if (t.dataset.winClose) closeApp(t.dataset.winClose);
   if (t.dataset.view) cal.changeView(t.dataset.view);
@@ -139,7 +144,7 @@ function show(e: Ev) {
       ${e.food ? `<dt>Food</dt><dd>${esc(e.food)}</dd>` : ''}
       ${e.host ? `<dt>Host</dt><dd>${esc(e.host)}</dd>` : ''}
       ${e.notes ? `<dt>Notes</dt><dd>${esc(e.notes)}</dd>` : ''}
-      <dt>Source</dt><dd>${esc(e.subject)}${e.sender ? `<br>${esc(e.sender)}` : ''}</dd>
+      <dt>Source</dt><dd>${e.source === 'list' ? 'free-foods list' : 'dormspam'}: ${esc(e.subject)}${e.sender ? `<br>${esc(e.sender)}` : ''}</dd>
       <dt>Confidence</dt><dd>${Math.round((e.confidence ?? 0) * 100)}%</dd>
     </dl>`;
   backdrop.hidden = false;
@@ -151,12 +156,15 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { backdrop
 
 // ---------- calendar ----------
 let cal: any;
+const syncFilterButtons = () => all('[data-filter]').forEach(b => b.classList.toggle('active', b.dataset.filter === filter));
 function initCalendar() {
   cal = new FullCalendar.Calendar($('cal'), {
     headerToolbar: false, initialView: mobile() ? 'listWeek' : 'dayGridMonth', height: '100%', nowIndicator: true, dayMaxEvents: 3, fixedWeekCount: false,
-    events: '/api/events',
+    events: (info: { startStr: string; endStr: string }, ok: (evs: unknown[]) => void, fail: (e: unknown) => void) =>
+      fetch(`/api/events?start=${encodeURIComponent(info.startStr)}&end=${encodeURIComponent(info.endStr)}`).then(r => r.json())
+        .then((rows: Ev[]) => ok(rows.filter(passes))).catch(fail),
     eventDataTransform: (r: Ev) => ({ id: r.id, title: r.title, start: r.start_at, end: r.end_at || undefined,
-      backgroundColor: COLOR[kind(r)], borderColor: '#000', classNames: [kind(r), (r.confidence ?? 1) < 0.6 ? 'low' : ''], extendedProps: r }),
+      backgroundColor: color(r), borderColor: r.leftovers ? '#ff8000' : '#000', classNames: classes(r), extendedProps: r }),
     eventClick: (i: { jsEvent: Event; event: { extendedProps: Ev } }) => { i.jsEvent.preventDefault(); show(i.event.extendedProps); },
     datesSet: () => {
       $('viewTitle').textContent = cal.view.title;
@@ -174,7 +182,7 @@ async function loadNow() {
   const rows = (await (await fetch(`/api/events?start=${new Date(t - 3 * 36e5).toISOString()}&end=${new Date(t + 36e5).toISOString()}`)).json()) as Ev[];
   if (!Array.isArray(rows)) return; // a 502 during a deploy hands back an error object
   const endMs = (e: Ev) => e.end_at ? Date.parse(e.end_at) : Date.parse(e.start_at) + 72e5;
-  const live = rows.filter(e => !e.cancelled && (e.leftovers || Date.parse(e.start_at) <= t + 36e5) && endMs(e) > t);
+  const live = rows.filter(e => passes(e) && !e.cancelled && (e.leftovers || Date.parse(e.start_at) <= t + 36e5) && endMs(e) > t);
   const ul = $('nowList');
   ul.innerHTML = live.length
     ? live.map((e, i) => `<li data-i="${i}"><img src="/icons/pizza.svg" alt=""><b>${esc(e.title)}</b><span>${esc(e.location || '')} · ${e.leftovers ? 'now' : fmt(e.start_at, { hour: 'numeric', minute: '2-digit' })}</span></li>`).join('')
@@ -190,6 +198,7 @@ tick(); setInterval(tick, 15000);
 
 openApp('calendar');
 initCalendar();
+syncFilterButtons();
 loadNow(); setInterval(loadNow, 5 * 60e3);
 
 fetch('/api/me').then(r => r.json() as Promise<Me>).then(me => {

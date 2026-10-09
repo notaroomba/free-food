@@ -73,6 +73,7 @@ Rules:
 - The Subject line is content, not metadata: free-foods posts often put everything there ("free el jefes leftover stud4 dormcon/ua office" with body "title!"). Read Subject, body and attachments together.
 - MIT shorthand: "stud"/"student center" = W20, "stud4" = W20 4th floor (DormCon/UA offices are W20-4xx), "lobby 10"/"lobby 7", "infinite" = Infinite Corridor (buildings 7-8-4-10), "stata" = 32, "walker" = 50, "Z center"/"Zesiger" = W35, "Kresge" = W16, "media lab" = E14/E15, "banana lounge" = 26-110, "EC" = East Campus (Talbot lounge is in EC), "BC" = Burton-Conner, "Next" = Next House, "Mac" = MacGregor, "NH" = New House, "Random" = Random Hall, "El Jefe's" = burritos/tacos, "rn" = right now, "FCFS" = first come first served.
 - is_free_food is true only when food/drink is explicitly or very likely free for attendees ("free food", "pizza provided", "refreshments", "snacks", "leftovers in 32-G449", "dinner will be served"). NOT free: bake sales, fundraisers, anything with a price or "venmo", "bring your own", meal-swipe sales, paid studies/surveys (gift cards are not food), job/UROP/housing posts, generic restaurant mentions.
+- Only events people can walk to from MIT count: on campus or in Cambridge/Boston. Events at other universities, in other cities, or online-only (hackathons elsewhere, remote talks) are NOT free food here, even if meals are provided there.
 - One event per distinct occasion. For a recurring series, emit only occurrences within the next 30 days (max 4).
 - Times: resolve relative phrases ("this Thursday", "tonight", "in 10 min", "rn") against the Received timestamp. Output ISO 8601 WITH the America/New_York UTC offset (EDT -04:00 / EST -05:00). If a date but no time is given, use 12:00. If no end time is given (and it is not leftovers_now), end = null.
 - leftovers_now is true when food is available right now / first-come-first-served (typical free-food@mit.edu and dorm-list posts: "come grab", "leftovers in ...", "tray of rice in the Talbot fridge", "bowls on the benches outside UPOP"). Then start = the Received timestamp and end = start + 1 hour (food left in a dorm fridge or lounge: end = start + 24 hours). Dorm-list posts usually name a lounge, fridge or dorm instead of a building number; use that as the location.
@@ -96,8 +97,22 @@ export function promptText(mail: Mail): string {
   return `Received: ${received}\nFrom: ${mail.from}\nSubject: ${mail.subject}\n\n${mail.text.slice(0, 20000)}`;
 }
 
-/** Classify + extract events from one parsed email (subject + text + flyer images/PDFs). */
+/** Classify + extract events from one parsed email (subject + text + flyer images/PDFs).
+ *  If the API still rejects an attachment (corrupt, unsupported), the email is retried text-only rather than lost. */
 export async function extract(mail: Mail): Promise<Extraction> {
+  try {
+    return await extractOnce(mail);
+  } catch (e) {
+    if (e instanceof Anthropic.BadRequestError && /image|document|pdf/i.test(e.message) && (mail.images.length || mail.pdfs.length)) {
+      const out = await extractOnce({ ...mail, images: [], pdfs: [] });
+      out.reason = `(attachments dropped: ${e.message.slice(0, 120)}) ${out.reason}`;
+      return out;
+    }
+    throw e;
+  }
+}
+
+async function extractOnce(mail: Mail): Promise<Extraction> {
   client ??= new Anthropic();
   const content: Anthropic.Beta.BetaContentBlockParam[] = [
     ...mail.images.map(i => ({ type: 'image' as const, source: { type: 'base64' as const, media_type: i.media_type, data: i.data } })),

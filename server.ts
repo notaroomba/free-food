@@ -2,7 +2,7 @@ import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { extname } from 'node:path';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { listEvents, stats, type EventRow } from './db.ts';
+import { listEvents, stats, deleteEvent, type EventRow } from './db.ts';
 import { parseAll, processEmail, startPoller } from './mail.ts';
 
 const PORT = Number(process.env.PORT || 3000);
@@ -95,7 +95,7 @@ function serveStatic(res: ServerResponse, p: string) {
     res.end(data);
   } catch { send(res, 404, rel === 'app.js' ? 'run `npm run build`' : 'not found'); }
 }
-const body = (req: IncomingMessage, limit = 30e6) => new Promise<Buffer>((ok, no) => {
+const body = (req: IncomingMessage, limit = 64e6) => new Promise<Buffer>((ok, no) => { // several 20 MB attachments in one message
   const c: Buffer[] = []; let n = 0;
   req.on('data', (d: Buffer) => { if ((n += d.length) > limit) { req.destroy(); no(new Error('too large')); } c.push(d); });
   req.on('end', () => ok(Buffer.concat(c))); req.on('error', no);
@@ -153,6 +153,10 @@ export async function handle(req: IncomingMessage, res: ServerResponse): Promise
     reply(200, JSON.stringify({ queued: mails.length }), 'application/json');
     for (const m of mails) processEmail(m).then(r => console.log('[backfill]', m.subject, JSON.stringify(r)), e => console.error('[backfill]', m.subject, (e as Error).message));
     return;
+  }
+  if (req.method === 'DELETE' && /^\/api\/events\/\d+$/.test(p)) { // moderation: curl -X DELETE -H "Authorization: Bearer $INGEST_TOKEN" .../api/events/ID
+    if (!bearerOk(req, process.env.INGEST_TOKEN)) return send(res, 401, 'bad token');
+    return json(res, { deleted: deleteEvent(Number(p.split('/').pop())) });
   }
   if (OIDC && p === '/auth/login') return login(res);
   if (OIDC && p === '/auth/callback') return callback(req, res, url);

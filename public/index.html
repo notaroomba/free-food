@@ -64,6 +64,10 @@
     <button class="tb-btn" data-view="dayGridMonth">Month</button>
     <button class="tb-btn" data-view="timeGridWeek">Week</button>
     <button class="tb-btn" data-view="listWeek">List</button>
+    <span class="sep"></span>
+    <button class="tb-btn filter active" data-filter="all" title="Show everything">All</button>
+    <button class="tb-btn filter src-dormspam" data-filter="dormspam" title="Only dormspam">Dormspam</button>
+    <button class="tb-btn filter src-list" data-filter="list" title="Only the free-foods@mit.edu list">Free-foods</button>
     <span class="spacer"></span>
     <span class="view-title" id="viewTitle"></span>
   </div>
@@ -100,7 +104,8 @@
   </div>
   <div class="about">
     <div class="hero"><img src="/icons/pizza.svg" alt=""><div><h1>Free Foods @ MIT</h1><div>Version 98 · by <a href="https://github.com/notaroomba/free-foods" target="_blank" rel="noopener">@notaroomba</a> on GitHub</div></div></div>
-    <p>Every dormspam and <!--email_off-->free-foods@mit.edu<!--/email_off--> email is read by Claude, flyer photos and PDFs included, and anything with free food lands on the calendar. Orange means it is out right now. Times and rooms can be wrong.</p>
+    <p>Every dormspam and <!--email_off-->free-foods@mit.edu<!--/email_off--> email is read by Claude, flyer photos and PDFs included, and anything with free food lands on the calendar. Times and rooms can be wrong.</p>
+    <p class="legend"><span class="swatch dormspam"></span> dormspam &nbsp; <span class="swatch list"></span> free-foods list &nbsp; <span class="swatch now"></span> out right now &nbsp; <span class="swatch cancelled"></span> cancelled</p>
     <p>Subscribe in Google or Apple Calendar:<code class="url" id="icsUrl">/calendar.ics</code></p>
     <p>Senders can keep an email off the calendar by writing <code>dormsoup-ignore</code> in it.</p>
     <div class="dialog-row buttons"><button class="btn-default" data-win-close="about">OK</button></div>

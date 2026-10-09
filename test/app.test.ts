@@ -10,7 +10,8 @@ import type { AddressInfo } from 'node:net';
 import type { Extraction } from '../extract.ts';
 
 const { prefilter, SCHEMA, promptText } = await import('../extract.ts');
-const { parseRaw, parseAll, processEmail, dedupKey, source, DORMSPAM_RE } = await import('../mail.ts');
+const { parseRaw, parseAll, processEmail, dedupKey, source, DORMSPAM_RE, sniffImage, prepImage } = await import('../mail.ts');
+const sharp = (await import('sharp')).default;
 const { handle, toICS } = await import('../server.ts');
 const { listEvents } = await import('../db.ts');
 
@@ -143,9 +144,24 @@ test('free-foods list posts: only future events or a lot of food make the calend
   assert.deepEqual(await run(dormspam('leftover cookies', 'a few left in 4-231', '<d1@mit.edu>'), { start: past, leftovers_now: true, quantity: 'small', location: '4-233' }), { source: 'dormspam', isFreeFood: true, events: 1 });
 });
 
+test('images: real type sniffed, oversized ones shrunk to <=2000px JPEG, junk dropped', async () => {
+  const png = await sharp({ create: { width: 9000, height: 120, channels: 3, background: '#fff' } }).png().toBuffer();
+  assert.equal(sniffImage(png), 'image/png');
+  const big = await prepImage({ content: png, contentType: 'image/jpeg', size: png.length }); // mislabelled AND wider than the 8000px cap
+  assert.ok(big);
+  assert.equal(big.media_type, 'image/jpeg');
+  const meta = await sharp(Buffer.from(big.data, 'base64')).metadata();
+  assert.ok((meta.width ?? 0) <= 2000 && (meta.height ?? 0) <= 2000, `got ${meta.width}x${meta.height}`);
+  const small = await sharp({ create: { width: 300, height: 200, channels: 3, background: '#f00' } }).png().toBuffer();
+  const kept = await prepImage({ content: small, contentType: 'image/png', size: small.length });
+  assert.equal(kept?.media_type, 'image/png');
+  assert.equal(kept?.size, small.length); // passed through untouched
+  assert.equal(await prepImage({ content: Buffer.from('not an image'), contentType: 'image/heic', size: 12 }), null);
+});
+
 test('toICS: valid skeleton, UTC stamps, escaped commas', () => {
   const ics = toICS([{ id: 7, title: 'Pizza, boba', start_at: '2026-10-09T22:00:00.000Z', end_at: null, location: 'W20-306', updated_at: '2026-10-08 18:00:00',
-    sender: 'a@mit.edu', cancelled: 0, food: null, host: null, notes: null, leftovers: 0, confidence: 1, subject: 's' }], 'example.test');
+    sender: 'a@mit.edu', cancelled: 0, food: null, host: null, notes: null, leftovers: 0, confidence: 1, subject: 's', source: 'dormspam' }], 'example.test');
   assert.match(ics, /^BEGIN:VCALENDAR\r\n/);
   assert.match(ics, /UID:ff-7@example\.test/);
   assert.match(ics, /DTSTART:20261009T220000Z/);
@@ -184,5 +200,10 @@ test('http: healthz open, ingest needs token, events served as JSON', async () =
     assert.equal((await fetch(`${base}/style.css`)).headers.get('content-type'), 'text/css; charset=utf-8');
     assert.equal((await fetch(`${base}/icons/pizza.svg`)).status, 200);
     assert.equal((await fetch(`${base}/icons/../server.ts`)).status, 404);
+    // moderation endpoint: token-protected delete
+    const id = (all.find(e => e.title === 'Free pizza — Hack Night') as { id: number }).id;
+    assert.equal((await fetch(`${base}/api/events/${id}`, { method: 'DELETE' })).status, 401);
+    assert.deepEqual(await (await fetch(`${base}/api/events/${id}`, { method: 'DELETE', headers: { authorization: 'Bearer test-token' } })).json(), { deleted: 1 });
+    assert.equal(((await (await fetch(`${base}/api/events?start=2026-10-09T00:00:00Z&end=2026-10-10T00:00:00Z`)).json()) as { title: string }[]).filter(e => e.title === 'Free pizza — Hack Night').length, 0);
   } finally { srv.close(); }
 });
