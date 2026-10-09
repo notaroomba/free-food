@@ -199,9 +199,6 @@ button:disabled { color: var(--sh); text-shadow: 1px 1px 0 var(--hl); cursor: de
 .fc .fc-event.cancelled { text-decoration: line-through; }
 .fc .fc-event.low { opacity: .7; }
 .fc .fc-list-event.now .fc-list-event-dot { border-color: #ff8000 !important; }
-.tb-btn.filter.src-dormspam::before, .tb-btn.filter.src-list::before { content: ''; display: inline-block; width: 9px; height: 9px; margin-right: 5px; border: 1px solid #000; vertical-align: -1px; }
-.tb-btn.filter.src-dormspam::before { background: #008000; }
-.tb-btn.filter.src-list::before { background: #000080; }
 .legend .swatch { display: inline-block; width: 11px; height: 11px; border: 1px solid #000; vertical-align: -1px; }
 .legend .swatch.dormspam { background: #008000; } .legend .swatch.list { background: #000080; }
 .legend .swatch.now { background: #fff; border-left: 4px solid #ff8000; } .legend .swatch.cancelled { background: #808080; }
