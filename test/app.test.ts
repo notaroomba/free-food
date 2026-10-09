@@ -161,6 +161,9 @@ test('http: healthz open, ingest needs token, events served as JSON', async () =
   try {
     assert.equal(((await (await fetch(`${base}/healthz`)).json()) as { ok: boolean }).ok, true);
     assert.equal((await fetch(`${base}/ingest`, { method: 'POST', body: 'x' })).status, 401);
+    const pre = await fetch(`${base}/ingest`, { method: 'OPTIONS' });
+    assert.equal(pre.status, 204);
+    assert.equal(pre.headers.get('access-control-allow-origin'), 'https://outlook.office.com'); // browser-side backfill from Outlook on the web
     const optOut = `Message-ID: <h@mit.edu>\r\nFrom: Housing <housing@mit.edu>\r\nTo: nathan@mit.edu\r\nSubject: Housing lottery\r\n\r\nlottery results posted. dormsoup-ignore\r\n`;
     const r = await fetch(`${base}/ingest`, { method: 'POST', headers: { authorization: 'Bearer test-token' }, body: optOut });
     assert.deepEqual(await r.json(), { skipped: 'opted-out' });

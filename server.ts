@@ -44,6 +44,8 @@ const pub = (e: EventRow): PublicEvent => {
   const { message_id: _m, dedup_key: _d, thread_key: _t, ...rest } = e;
   return { ...rest, sender: (e.sender || '').replace(/\s*<[^>]*>/g, '').replace(/[^\s@,]+@\S+/g, '').replace(/"/g, '').replace(/\s*,\s*$/, '').trim() || null };
 };
+// Browser-side backfill: a script running inside Outlook on the web posts raw messages here, so allow that origin.
+const INGEST_CORS = { 'access-control-allow-origin': process.env.INGEST_CORS_ORIGIN || 'https://outlook.office.com', 'access-control-allow-methods': 'POST, OPTIONS', 'access-control-allow-headers': 'authorization, content-type, x-envelope-from', 'access-control-max-age': '86400' };
 const FROM_DOMAINS = (process.env.INGEST_FROM_DOMAINS ?? 'mit.edu').toLowerCase().split(',').map(s => s.trim()).filter(Boolean);
 
 // --- OIDC (Petrock -> MIT Touchstone) authorization-code flow ---
@@ -134,19 +136,21 @@ export async function handle(req: IncomingMessage, res: ServerResponse): Promise
   const p = url.pathname;
   if (!allow(`ip:${clientIp(req)}`, 300, 60e3)) return send(res, 429, 'slow down');
   if (p === '/healthz') return json(res, { ok: true, ...stats() });
+  if (p === '/ingest' && req.method === 'OPTIONS') { res.writeHead(204, { ...SECURITY_HEADERS, ...INGEST_CORS }); res.end(); return; }
   if (p === '/ingest' && req.method === 'POST') {
-    if (!bearerOk(req, process.env.INGEST_TOKEN)) return send(res, 401, 'bad token');
+    const reply = (code: number, body: string, type?: string) => { res.writeHead(code, { 'content-type': type || 'text/plain; charset=utf-8', ...SECURITY_HEADERS, ...INGEST_CORS }); res.end(body); };
+    if (!bearerOk(req, process.env.INGEST_TOKEN)) return reply(401, 'bad token');
     // The Cloudflare worker passes the SMTP envelope sender, which Cloudflare has already SPF/DKIM-checked. The inbox address is
     // public, so without this anyone could mail the inbox and spend model tokens. Absent header (curl) = trusted token holder.
     const envFrom = req.headers['x-envelope-from']; // present but empty = null sender (bounces): also ignored
-    if (envFrom !== undefined && FROM_DOMAINS.length && !FROM_DOMAINS.includes(String(envFrom).toLowerCase().split('@').pop()!)) return send(res, 202, 'ignored: sender domain');
-    // Spend caps: one sender cannot flood the model, and the whole inbox has a daily ceiling. 429 makes the worker bounce the mail.
-    if (!allow(`ingest:${String(envFrom ?? 'token').toLowerCase()}`, Number(process.env.MAX_INGEST_PER_SENDER_HOUR || 30), 36e5)) return send(res, 429, 'sender rate limit');
-    if (!allow('ingest:all', Number(process.env.MAX_INGEST_PER_DAY || 500), 864e5)) return send(res, 429, 'daily ingest limit');
+    if (envFrom !== undefined && FROM_DOMAINS.length && !FROM_DOMAINS.includes(String(envFrom).toLowerCase().split('@').pop()!)) return reply(202, 'ignored: sender domain');
+    // Spend caps: one mail sender cannot flood the model (token-only callers are trusted), and the inbox has a daily ceiling. 429 makes the worker bounce the mail.
+    if (envFrom !== undefined && !allow(`ingest:${String(envFrom).toLowerCase()}`, Number(process.env.MAX_INGEST_PER_SENDER_HOUR || 30), 36e5)) return reply(429, 'sender rate limit');
+    if (!allow('ingest:all', Number(process.env.MAX_INGEST_PER_DAY || 1500), 864e5)) return reply(429, 'daily ingest limit');
     const mails = (await parseAll(await body(req))).slice(0, 200);
-    if (mails.length === 1) return json(res, await processEmail(mails[0]));
-    // Backfill: an email carrying many forwarded .eml attachments. Answer now so the sender gets no bounce; process in order.
-    json(res, { queued: mails.length });
+    if (mails.length === 1 && url.searchParams.get('async') !== '1') return reply(200, JSON.stringify(await processEmail(mails[0])), 'application/json');
+    // Backfill (many attached .eml files, or ?async=1): answer now so nothing bounces or times out; process in order.
+    reply(200, JSON.stringify({ queued: mails.length }), 'application/json');
     for (const m of mails) processEmail(m).then(r => console.log('[backfill]', m.subject, JSON.stringify(r)), e => console.error('[backfill]', m.subject, (e as Error).message));
     return;
   }
