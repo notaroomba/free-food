@@ -160,11 +160,12 @@ const syncFilterButtons = () => all('[data-filter]').forEach(b => b.classList.to
 function initCalendar() {
   cal = new FullCalendar.Calendar($('cal'), {
     headerToolbar: false, initialView: mobile() ? 'listWeek' : 'dayGridMonth', height: '100%', nowIndicator: true, dayMaxEvents: 3, fixedWeekCount: false,
+    eventDisplay: 'block', // solid colour blocks (default month view draws timed events as a dot + text)
     events: (info: { startStr: string; endStr: string }, ok: (evs: unknown[]) => void, fail: (e: unknown) => void) =>
       fetch(`/api/events?start=${encodeURIComponent(info.startStr)}&end=${encodeURIComponent(info.endStr)}`).then(r => r.json())
         .then((rows: Ev[]) => ok(rows.filter(passes))).catch(fail),
     eventDataTransform: (r: Ev) => ({ id: r.id, title: r.title, start: r.start_at, end: r.end_at || undefined,
-      backgroundColor: color(r), borderColor: r.leftovers ? '#ff8000' : '#000', classNames: classes(r), extendedProps: r }),
+      backgroundColor: color(r), borderColor: color(r), classNames: classes(r), extendedProps: r }), // list view's dot takes borderColor
     eventClick: (i: { jsEvent: Event; event: { extendedProps: Ev } }) => { i.jsEvent.preventDefault(); show(i.event.extendedProps); },
     datesSet: () => {
       $('viewTitle').textContent = cal.view.title;
