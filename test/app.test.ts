@@ -131,6 +131,9 @@ test('processEmail: every email reaches the model (only opt-outs skip), dedupe +
   rows = listEvents('2026-10-09T00:00:00.000Z', '2026-10-10T00:00:00.000Z');
   assert.equal(rows.length, 1);
   assert.equal(rows[0].start_at, '2026-10-09T23:00:00.000Z');
+  // an old dormspam event stays in the DB (history) but must not be in the subscription feed
+  const old = { extract: async (): Promise<Extraction> => ({ is_free_food: true, reason: 'old', poster: null, events: [event({ title: 'old pizza', start: '2026-09-01T18:00:00-04:00', location: '26-100' })] }) };
+  await processEmail(await parseRaw(Buffer.from(dormspam('Old pizza', 'free pizza', '<old@mit.edu>'))), old);
 });
 
 test('free-foods list posts: only future events or a lot of food make the calendar; dormspam is never filtered', async () => {
@@ -191,7 +194,13 @@ test('http: healthz open, ingest needs token, events served as JSON', async () =
     assert.equal(ev.length, 1);
     assert.equal(ev[0].sender, 'Jane Doe'); // public site: display name only, no address or internal ids
     assert.equal(ev[0].message_id, undefined);
-    assert.match(await (await fetch(`${base}/calendar.ics`)).text(), /BEGIN:VEVENT/);
+    const ics = await (await fetch(`${base}/calendar.ics`)).text();
+    assert.match(ics, /BEGIN:VEVENT/);
+    assert.match(ics, /REFRESH-INTERVAL;VALUE=DURATION:PT1H/); // subscription feed, refreshed hourly by clients
+    assert.doesNotMatch(ics, /old pizza/); // past events are not in the feed
+    const me = (await (await fetch(`${base}/api/me`)).json()) as { webcal: string; gcal: string; ics: string };
+    assert.equal(me.webcal, 'webcal://localhost/calendar.ics');
+    assert.match(me.gcal, /^https:\/\/calendar\.google\.com\/calendar\/r\?cid=http/);
     const home = await fetch(`${base}/`);
     const html = await home.text();
     assert.match(html, /Free Foods @ MIT/);

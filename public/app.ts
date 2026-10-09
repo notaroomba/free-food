@@ -7,7 +7,7 @@ interface Ev {
   host: string | null; notes: string | null; sender: string | null; subject: string | null;
   leftovers: number; cancelled: number; confidence: number | null; source: 'dormspam' | 'list' | 'other' | null;
 }
-interface Me { email: string; name?: string; auth: boolean; ics: string }
+interface Me { email: string; name?: string; auth: boolean; ics: string; webcal: string; gcal: string }
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const all = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode = document) => [...root.querySelectorAll<T>(sel)];
@@ -60,6 +60,7 @@ const APPS: Record<string, { title: string; icon: string }> = {
   calendar: { title: 'Free Foods @ MIT', icon: '/icons/calendar.svg' },
   now: { title: 'Right Now', icon: '/icons/pizza.svg' },
   about: { title: 'About', icon: '/icons/help.svg' },
+  subscribe: { title: 'Subscribe', icon: '/icons/disk.svg' },
 };
 const opened: Record<string, { win: HTMLElement; btn: HTMLButtonElement; prev?: Record<string, string> }> = {};
 const taskButtons = $('taskButtons');
@@ -197,7 +198,8 @@ initCalendar();
 loadNow(); setInterval(loadNow, 5 * 60e3);
 
 fetch('/api/me').then(r => r.json() as Promise<Me>).then(me => {
-  all<HTMLAnchorElement>('[data-ics]').forEach(a => { a.href = me.ics; });
+  $<HTMLAnchorElement>('subWebcal').href = me.webcal;
+  $<HTMLAnchorElement>('subGcal').href = me.gcal;
   $('icsUrl').textContent = me.ics;
   if (me.auth) { $('who').textContent = me.email; all('[data-logout]').forEach(a => { a.hidden = false; }); }
 }).catch(() => {});

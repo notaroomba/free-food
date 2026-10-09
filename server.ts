@@ -118,7 +118,10 @@ const clientIp = (req: IncomingMessage) => String(req.headers['x-forwarded-for']
 const icsDate = (iso: string) => new Date(iso).toISOString().replace(/[-:]|\.\d{3}/g, '');
 const icsEsc = (s: string | null | undefined) => String(s || '').replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r\n|[\r\n]/g, '\\n').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
 export function toICS(events: PublicEvent[], host = 'free-foods'): string {
-  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//free-foods//EN', 'X-WR-CALNAME:Free Foods @ MIT', 'X-WR-TIMEZONE:America/New_York'];
+  // A subscription feed: clients re-fetch it (REFRESH-INTERVAL / X-PUBLISHED-TTL are the hints they honour), so it only carries what is ahead.
+  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//free-foods//EN', 'METHOD:PUBLISH', 'X-WR-CALNAME:Free Foods @ MIT',
+    'X-WR-CALDESC:Free food at MIT from dormspam and the free-foods list', 'X-WR-TIMEZONE:America/New_York',
+    'REFRESH-INTERVAL;VALUE=DURATION:PT1H', 'X-PUBLISHED-TTL:PT1H'];
   for (const e of events) {
     lines.push('BEGIN:VEVENT', `UID:ff-${e.id}@${host}`, `DTSTAMP:${icsDate(e.updated_at.replace(' ', 'T') + 'Z')}`, `DTSTART:${icsDate(e.start_at)}`,
       `DTEND:${icsDate(e.end_at || new Date(Date.parse(e.start_at) + 36e5).toISOString())}`,
@@ -165,8 +168,8 @@ export async function handle(req: IncomingMessage, res: ServerResponse): Promise
   const u = user(req);
   if (p === '/calendar.ics') {
     if (OIDC && !u && !(process.env.ICS_TOKEN && url.searchParams.get('token') === process.env.ICS_TOKEN)) return send(res, 401, 'login or ?token= required');
-    const now = Date.now();
-    return send(res, 200, toICS(listEvents(new Date(now - 30 * 864e5).toISOString(), new Date(now + 90 * 864e5).toISOString()).map(pub), url.host), 'text/calendar; charset=utf-8');
+    const now = Date.now(); // upcoming only: from 3 h ago (still-running leftovers) to a year out
+    return send(res, 200, toICS(listEvents(new Date(now - 3 * 36e5).toISOString(), new Date(now + 365 * 864e5).toISOString()).map(pub), url.host), 'text/calendar; charset=utf-8');
   }
   if (!u) { res.writeHead(302, { Location: '/auth/login' }); res.end(); return; }
   if (p === '/') return serveStatic(res, '/index.html');
@@ -176,7 +179,11 @@ export async function handle(req: IncomingMessage, res: ServerResponse): Promise
     const to = url.searchParams.get('end') || new Date(Date.now() + 60 * 864e5).toISOString();
     return json(res, listEvents(new Date(from).toISOString(), new Date(to).toISOString()).map(pub));
   }
-  if (p === '/api/me') return json(res, { email: u.email, name: u.name, auth: !!OIDC, ics: `${PUBLIC_URL}/calendar.ics${OIDC && process.env.ICS_TOKEN ? `?token=${process.env.ICS_TOKEN}` : ''}` });
+  if (p === '/api/me') {
+    const ics = `${PUBLIC_URL}/calendar.ics${OIDC && process.env.ICS_TOKEN ? `?token=${process.env.ICS_TOKEN}` : ''}`;
+    const webcal = ics.replace(/^https?:/, 'webcal:'); // Apple Calendar / Outlook subscribe (auto-refreshing) instead of a one-off import
+    return json(res, { email: u.email, name: u.name, auth: !!OIDC, ics, webcal, gcal: `https://calendar.google.com/calendar/r?cid=${encodeURIComponent(ics)}` });
+  }
   send(res, 404, 'not found');
 }
 

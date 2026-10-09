@@ -223,7 +223,9 @@ button:disabled { color: var(--sh); text-shadow: 1px 1px 0 var(--hl); cursor: de
 .dialog-foot { padding: 0 12px 12px; }
 
 /* about window */
-#aboutWin { width: min(420px, 94vw); }
+#aboutWin, #subscribeWin { width: min(440px, 94vw); }
+.about a.btn98 { display: block; text-align: center; text-decoration: none; color: #000; }
+.linklike { background: none; border: none; color: var(--title1); text-decoration: underline; cursor: pointer; font: inherit; padding: 0; }
 .about { padding: 14px; line-height: 1.5; display: flex; flex-direction: column; gap: 10px; }
 .about .hero { display: flex; align-items: center; gap: 12px; }
 .about .hero img { width: 48px; height: 48px; image-rendering: pixelated; }

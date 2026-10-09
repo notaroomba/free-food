@@ -16,7 +16,7 @@
 <div class="desktop-icons">
   <button class="desktop-icon" data-app-open="calendar"><img src="/icons/calendar.svg" alt=""><span class="icon-label">Calendar</span></button>
   <button class="desktop-icon" data-app-open="now"><img src="/icons/pizza.svg" alt=""><span class="icon-label">Right Now</span></button>
-  <a class="desktop-icon" href="/calendar.ics" data-ics><img src="/icons/disk.svg" alt=""><span class="icon-label">Subscribe</span></a>
+  <button class="desktop-icon" data-app-open="subscribe"><img src="/icons/disk.svg" alt=""><span class="icon-label">Subscribe</span></button>
   <button class="desktop-icon" data-app-open="about"><img src="/icons/help.svg" alt=""><span class="icon-label">About</span></button>
 </div>
 
@@ -33,7 +33,7 @@
   <div class="menubar">
     <div class="menu" data-menu><span>File</span>
       <div class="dropdown">
-        <a href="/calendar.ics" data-ics>Subscribe (.ics)…</a>
+        <button data-app-open="subscribe">Subscribe to calendar…</button>
         <button data-action="refresh">Refresh<span class="shortcut">F5</span></button>
         <hr>
         <a href="/auth/logout" data-logout hidden>Log out</a>
@@ -102,9 +102,28 @@
     <div class="hero"><img src="/icons/pizza.svg" alt=""><div><h1>Free Foods @ MIT</h1><div>Version 98 · by <a href="https://github.com/notaroomba/free-foods" target="_blank" rel="noopener">@notaroomba</a> on GitHub</div></div></div>
     <p>Every dormspam and <!--email_off-->free-foods@mit.edu<!--/email_off--> email is read by Claude, flyer photos and PDFs included, and anything with free food lands on the calendar. Times and rooms can be wrong.</p>
     <p class="legend"><span class="swatch dormspam"></span> dormspam &nbsp; <span class="swatch list"></span> free-foods list &nbsp; <span class="swatch now"></span> out right now &nbsp; <span class="swatch cancelled"></span> cancelled</p>
-    <p>Subscribe in Google or Apple Calendar:<code class="url" id="icsUrl">/calendar.ics</code></p>
+    <p>Subscribe once and new food shows up in your own calendar automatically: <button class="linklike" data-app-open="subscribe">open Subscribe</button>.</p>
     <p>Senders can keep an email off the calendar by writing <code>dormsoup-ignore</code> in it.</p>
     <div class="dialog-row buttons"><button class="btn-default" data-win-close="about">OK</button></div>
+  </div>
+</div>
+
+<div class="window app-window" id="subscribeWin" hidden>
+  <div class="titlebar">
+    <img class="titlebar-icon-img" src="/icons/disk.svg" alt="">
+    <span class="titlebar-text">Subscribe to Free Foods</span>
+    <span class="titlebar-buttons">
+      <button data-win="min" aria-label="minimize">_</button>
+      <button data-win="max" aria-label="maximize">▢</button>
+      <button data-win="close" aria-label="close">✕</button>
+    </span>
+  </div>
+  <div class="about">
+    <p>This is a live feed: your calendar app re-checks it every hour, so upcoming free food appears on its own. Only events from now on are included.</p>
+    <a class="btn98 primary" id="subWebcal" href="#">Apple Calendar / Outlook / iPhone</a>
+    <a class="btn98" id="subGcal" href="#" target="_blank" rel="noopener">Google Calendar</a>
+    <p>Or paste this URL into any calendar app's "subscribe" / "from URL" option:<code class="url" id="icsUrl">/calendar.ics</code></p>
+    <div class="dialog-row buttons"><button class="btn-default" data-win-close="subscribe">OK</button></div>
   </div>
 </div>
 
@@ -125,7 +144,7 @@
   <div class="items">
     <button data-app-open="calendar"><img src="/icons/calendar.svg" alt=""> Calendar</button>
     <button data-app-open="now"><img src="/icons/pizza.svg" alt=""> Right Now</button>
-    <a href="/calendar.ics" data-ics><img src="/icons/disk.svg" alt=""> Subscribe (.ics)</a>
+    <button data-app-open="subscribe"><img src="/icons/disk.svg" alt=""> Subscribe</button>
     <button data-app-open="about"><img src="/icons/help.svg" alt=""> About</button>
     <hr>
     <a href="/auth/logout" data-logout hidden><img src="/icons/help.svg" alt=""> Log out</a>
