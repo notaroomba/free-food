@@ -1,0 +1,25 @@
+{
+  "name": "free-food",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "24"
+  },
+  "scripts": {
+    "start": "node server.ts",
+    "build": "tsc -p tsconfig.web.json",
+    "check": "tsc --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "test": "node --test test/app.test.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.132.1",
+    "imapflow": "^2.3.0",
+    "mailparser": "^3.9.37"
+  },
+  "devDependencies": {
+    "@types/mailparser": "^3.9.0",
+    "@types/node": "^24.19.1",
+    "typescript": "^7.0.2"
+  }
+}

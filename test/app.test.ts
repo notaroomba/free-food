@@ -1,0 +1,183 @@
+// One runnable check per piece of non-trivial logic. No LLM calls: the extractor is injected.
+process.env.DB_PATH = ':memory:';
+process.env.INGEST_TOKEN = 'test-token';
+process.env.PUBLIC_URL = 'http://localhost';
+
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
+import type { Extraction } from '../extract.ts';
+
+const { prefilter, SCHEMA, promptText } = await import('../extract.ts');
+const { parseRaw, parseAll, processEmail, dedupKey, source, DORMSPAM_RE } = await import('../mail.ts');
+const { handle, toICS } = await import('../server.ts');
+const { listEvents } = await import('../db.ts');
+
+const dormspam = (subject: string, body: string, id = `<${Math.random()}@mit.edu>`) =>
+  `Message-ID: ${id}\r\nFrom: Jane Doe <jdoe@mit.edu>\r\nTo: jdoe@mit.edu\r\nDate: Thu, 08 Oct 2026 14:00:00 -0400\r\nSubject: ${subject}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${body}\r\n\r\nbcc'd to all dorms, for bc-talk\r\n`;
+const event = (over: Partial<Extraction['events'][number]> = {}): Extraction['events'][number] => ({
+  title: 'Free pizza — Hack Night', food: 'Pizza', start: '2026-10-09T18:00:00-04:00', end: null, location: '32-G449', host: 'HackMIT',
+  notes: null, leftovers_now: false, cancelled: false, confidence: 0.9, quantity: 'medium', ...over,
+});
+const listPost = (subject: string, body: string, id: string) =>
+  `Message-ID: ${id}\r\nFrom: Eugenie Cha <eugeniec@mit.edu>\r\nTo: free-foods@mit.edu\r\nDate: Thu, 08 Oct 2026 20:59:00 -0400\r\nSubject: ${subject}\r\n\r\n${body}\r\n`;
+
+test('prefilter: food words hit, noise does not', () => {
+  assert.deepEqual(prefilter('Come to HACK NIGHT tonight, free pizza and boba in 32-G449!'), ['pizza', 'boba']);
+  assert.deepEqual(prefilter('UROP opening in the Media Lab, apply by Friday'), []);
+  assert.deepEqual(prefilter('Freedom of information talk'), []); // "free" inside "freedom" must not match
+});
+
+test('source label: every real-world dormspam footer variant, list recipients, other mail still analysed', () => {
+  for (const f of ["bcc'd to dorms, purple!", "bcc'ed to all dorms, brass-rat-gold for bc-talk", 'bcc’ed to dorms, orange for bc-talk',
+    'bcc-ed to all dorms..white for bc-talk', 'bcc to dormlists', "bcc'ed to dorms\nfinals season black for bc-talk :(", 'BCCed to all dorms']) {
+    assert.match(f, DORMSPAM_RE, f);
+  }
+  assert.doesNotMatch('please bcc me on the thread about the dorm', DORMSPAM_RE);
+  const base = { text: 'hi', recipients: '' };
+  assert.equal(source({ ...base, recipients: 'jdoe@mit.edu free-foods@mit.edu' }), 'list');
+  assert.equal(source({ ...base, recipients: 'list-id: <free-foods.mit.edu>' }), 'list');
+  assert.equal(source({ ...base, recipients: 'cc: bc-talk@mit.edu, next-forum@mit.edu' }), 'dormspam');
+  assert.equal(source({ ...base, text: "see you there!\nbcc'd to dorms, red for bc-talk" }), 'dormspam');
+  // real dorm-list post with no footer at all, addressed to the list (Outlook shows "To: ec-discuss")
+  assert.equal(source({ text: 'Hi gang i have placed a tray of newly acquired rice in the right talbot fridge', recipients: 'ec-discuss@mit.edu' }), 'dormspam');
+  // same post forwarded inline: the list only survives in the quoted header block
+  assert.equal(source({ ...base, text: 'From: Marvin Mao\nSent: Thursday\nTo: ec-discuss\nSubject: Rice in talbot\n\nHi gang i have placed a tray of rice' }), 'dormspam');
+  assert.equal(source({ ...base, text: 'From: x\nTo: free-foods@mit.edu\nSubject: pizza in 10-250' }), 'list');
+  assert.equal(source({ ...base, text: '> From: x\r\n> To: ec-discuss\r\n> hi' }), 'dormspam'); // reply-quoted forward, CRLF
+  assert.equal(source({ ...base, text: 'To: Ian MacGregor <imac@mit.edu>\nhi' }), 'other'); // a surname, not the macgregor list
+  assert.equal(source({ ...base, text: "bcc'd to dorms. dormsoup-ignore" }), null);
+  assert.equal(source({ text: 'Hi Nathan, your pset grade is posted', recipients: 'nathan@mit.edu' }), 'other');
+  assert.equal(source({ text: 'I live in MacGregor and ec-discuss is noisy', recipients: 'nathan@mit.edu' }), 'other'); // list names in prose are not dormspam
+});
+
+test('schema: every object closes additionalProperties and requires all fields', () => {
+  const walk = (s: any) => {
+    if (s.type === 'object') {
+      assert.equal(s.additionalProperties, false);
+      assert.deepEqual(Object.keys(s.properties).sort(), [...s.required].sort());
+      Object.values(s.properties).forEach(walk);
+    }
+    if (s.items) walk(s.items);
+  };
+  walk(SCHEMA);
+});
+
+test('dedupKey: same hour + place collapses, different hour does not', () => {
+  const a = dedupKey({ start: '2026-10-09T18:00:00-04:00', location: '32-G449', title: 'Pizza' });
+  const b = dedupKey({ start: '2026-10-09T18:30:00-04:00', location: 'Room 32-G449', title: 'Free pizza!!' });
+  const c = dedupKey({ start: '2026-10-09T19:30:00-04:00', location: '32-G449', title: 'Pizza' });
+  assert.equal(a, b);
+  assert.notEqual(a, c);
+});
+
+test('parseRaw + promptText: subject line and text attachments reach the model', async () => {
+  const raw = `Message-ID: <ics@mit.edu>\r\nFrom: a@mit.edu\r\nSubject: invite\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary="B"\r\n\r\n--B\r\nContent-Type: text/plain\r\n\r\nsee attached\r\n--B\r\nContent-Type: text/calendar; name="invite.ics"\r\nContent-Disposition: attachment; filename="invite.ics"\r\n\r\nBEGIN:VCALENDAR\r\nSUMMARY:Free tacos\r\nEND:VCALENDAR\r\n--B--\r\n`;
+  const m = await parseRaw(Buffer.from(raw));
+  assert.match(m.text, /see attached/);
+  assert.match(m.text, /\[Attachment invite\.ics\][\s\S]*SUMMARY:Free tacos/);
+  // real free-foods post: everything is in the subject, body is "title!", footer arrives as ATT00001.txt
+  const post = `Message-ID: <ej@mit.edu>\r\nFrom: Eugenie Cha <eugeniec@mit.edu>\r\nTo: free-foods@mit.edu\r\nDate: Thu, 08 Oct 2026 20:59:00 -0400\r\nSubject: free el jefes leftover stud4 dormcon/ua office\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary="C"\r\n\r\n--C\r\nContent-Type: text/plain\r\n\r\ntitle!\r\n--C\r\nContent-Type: text/plain; name="ATT00001.txt"\r\nContent-Disposition: attachment; filename="ATT00001.txt"\r\n\r\n_______________________________________________\r\nFree-foods mailing list\r\n--C--\r\n`;
+  const p = await parseRaw(Buffer.from(post));
+  const text = promptText(p);
+  assert.match(text, /^Received: .*2026/);
+  assert.match(text, /Subject: free el jefes leftover stud4 dormcon\/ua office/);
+  assert.match(text, /title!/);
+  assert.match(text, /\[Attachment ATT00001\.txt\][\s\S]*Free-foods mailing list/);
+  assert.equal(source(p), 'list');
+});
+
+test('parseRaw: unwraps a forward-as-attachment wrapper to the original dormspam', async () => {
+  const inner = dormspam('Free dumplings in 10-250', 'Leftover dumplings from our event, come grab! Room 10-250.', '<inner@mit.edu>');
+  const wrapper = `Message-ID: <outer@mit.edu>\r\nFrom: Me <me@mit.edu>\r\nSubject: FW: Free dumplings in 10-250\r\nDate: Thu, 08 Oct 2026 14:05:00 -0400\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary="B"\r\n\r\n--B\r\nContent-Type: text/plain\r\n\r\nfwd\r\n--B\r\nContent-Type: message/rfc822\r\nContent-Disposition: attachment; filename="orig.eml"\r\n\r\n${inner}\r\n--B--\r\n`;
+  const m = await parseRaw(Buffer.from(wrapper));
+  assert.equal(m.id, '<inner@mit.edu>');
+  assert.equal(m.subject, 'Free dumplings in 10-250');
+  assert.match(m.from, /jdoe@mit\.edu/);
+  assert.equal(m.date.toISOString(), '2026-10-08T18:00:00.000Z');
+  // backfill: one email carrying several forwarded .eml files yields each inner message
+  const a = dormspam('A', 'pizza', '<a@mit.edu>'), b = dormspam('B', 'boba', '<b@mit.edu>');
+  const batch = `Message-ID: <batch@mit.edu>\r\nFrom: Me <me@mit.edu>\r\nSubject: FW: 2 messages\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary="B"\r\n\r\n--B\r\nContent-Type: text/plain\r\n\r\nbackfill\r\n--B\r\nContent-Type: message/rfc822\r\nContent-Disposition: attachment; filename="a.eml"\r\n\r\n${a}\r\n--B\r\nContent-Type: message/rfc822\r\nContent-Disposition: attachment; filename="b.eml"\r\n\r\n${b}\r\n--B--\r\n`;
+  assert.deepEqual((await parseAll(Buffer.from(batch))).map(x => x.subject), ['A', 'B']);
+});
+
+test('processEmail: every email reaches the model (only opt-outs skip), dedupe + idempotency', async () => {
+  let calls = 0;
+  const fake = {
+    extract: async (mail: { text: string }): Promise<Extraction> => (calls++, /pizza/.test(mail.text)
+      ? { is_free_food: true, reason: 'pizza', events: [event(), event({ title: 'bad date', food: null, start: 'tomorrowish', location: null, host: null, confidence: 0.5 })] }
+      : { is_free_food: false, reason: 'no food', events: [] }),
+  };
+  const optOut = `Message-ID: <opt@mit.edu>\r\nFrom: Prof <prof@mit.edu>\r\nTo: nathan@mit.edu\r\nDate: Thu, 08 Oct 2026 14:00:00 -0400\r\nSubject: lunch tomorrow?\r\n\r\nWant to grab lunch? dormsoup-ignore\r\n`;
+  assert.deepEqual(await processEmail(await parseRaw(Buffer.from(optOut)), fake), { skipped: 'opted-out' });
+  assert.equal(calls, 0);
+  const personal = `Message-ID: <priv@mit.edu>\r\nFrom: Prof <prof@mit.edu>\r\nTo: nathan@mit.edu\r\nDate: Thu, 08 Oct 2026 14:00:00 -0400\r\nSubject: pset\r\n\r\nGrades are posted.\r\n`;
+  assert.deepEqual(await processEmail(await parseRaw(Buffer.from(personal)), fake), { source: 'other', isFreeFood: false, events: 0 }); // no gate: analysed anyway
+  assert.deepEqual(await processEmail(await parseRaw(Buffer.from(dormspam('UROP', 'apply now', '<u@mit.edu>'))), fake), { source: 'dormspam', isFreeFood: false, events: 0 });
+  assert.equal(calls, 2); // no food keyword, still analysed
+  const r1 = await processEmail(await parseRaw(Buffer.from(dormspam('Hack Night', 'free pizza in 32-G449 at 6pm', '<p1@mit.edu>'))), fake);
+  assert.deepEqual(r1, { source: 'dormspam', isFreeFood: true, events: 1 }); // invalid-date event dropped
+  await processEmail(await parseRaw(Buffer.from(dormspam('Hack Night reminder', 'free pizza in 32-G449 at 6pm', '<p2@mit.edu>'))), fake);
+  assert.deepEqual(await processEmail(await parseRaw(Buffer.from(dormspam('Hack Night', 'free pizza', '<p1@mit.edu>'))), fake), { skipped: 'seen' });
+  let rows = listEvents('2026-10-09T00:00:00.000Z', '2026-10-10T00:00:00.000Z');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].message_id, '<p2@mit.edu>'); // latest email wins
+  assert.equal(rows[0].start_at, '2026-10-09T22:00:00.000Z');
+  // a correction in the same thread (same sender, "Re:" subject) replaces the earlier time instead of adding a second event
+  const corrected = { extract: async (): Promise<Extraction> => ({ is_free_food: true, reason: 'moved', events: [event({ start: '2026-10-09T19:00:00-04:00' })] }) };
+  await processEmail(await parseRaw(Buffer.from(dormspam('Re: Hack Night', 'CORRECTION: pizza at 7pm not 6pm, 32-G449', '<p3@mit.edu>'))), corrected);
+  rows = listEvents('2026-10-09T00:00:00.000Z', '2026-10-10T00:00:00.000Z');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].start_at, '2026-10-09T23:00:00.000Z');
+});
+
+test('free-foods list posts: only future events or a lot of food make the calendar; dormspam is never filtered', async () => {
+  const past = new Date(Date.now() - 36e5).toISOString(), future = new Date(Date.now() + 864e5).toISOString();
+  const fake = (over: Partial<Extraction['events'][number]>) => ({ extract: async (): Promise<Extraction> => ({ is_free_food: true, reason: 'x', poster: null, events: [event({ title: 'list-filter case', ...over })] }) });
+  const run = (raw: string, over: Partial<Extraction['events'][number]>) => parseRaw(Buffer.from(raw)).then(m => processEmail(m, fake(over)));
+  assert.deepEqual(await run(listPost('leftover cookies 4-231', 'a few cookies', '<l1@mit.edu>'), { start: past, leftovers_now: true, quantity: 'small', location: '4-231' }), { source: 'list', isFreeFood: true, events: 0 });
+  assert.deepEqual(await run(listPost('leftover cookies 4-231', 'no amount said', '<l2@mit.edu>'), { start: past, leftovers_now: true, quantity: 'unknown', location: '4-232' }), { source: 'list', isFreeFood: true, events: 0 });
+  assert.deepEqual(await run(listPost('5 trays of catering 32-123', 'tons', '<l3@mit.edu>'), { start: past, leftovers_now: true, quantity: 'large', location: '32-123' }), { source: 'list', isFreeFood: true, events: 1 });
+  assert.deepEqual(await run(listPost('free lunch talk tomorrow', 'noon 10-250', '<l4@mit.edu>'), { start: future, quantity: 'small', location: '10-250' }), { source: 'list', isFreeFood: true, events: 1 });
+  assert.deepEqual(await run(dormspam('leftover cookies', 'a few left in 4-231', '<d1@mit.edu>'), { start: past, leftovers_now: true, quantity: 'small', location: '4-233' }), { source: 'dormspam', isFreeFood: true, events: 1 });
+});
+
+test('toICS: valid skeleton, UTC stamps, escaped commas', () => {
+  const ics = toICS([{ id: 7, title: 'Pizza, boba', start_at: '2026-10-09T22:00:00.000Z', end_at: null, location: 'W20-306', updated_at: '2026-10-08 18:00:00',
+    sender: 'a@mit.edu', cancelled: 0, food: null, host: null, notes: null, leftovers: 0, confidence: 1, subject: 's' }], 'example.test');
+  assert.match(ics, /^BEGIN:VCALENDAR\r\n/);
+  assert.match(ics, /UID:ff-7@example\.test/);
+  assert.match(ics, /DTSTART:20261009T220000Z/);
+  assert.match(ics, /DTEND:20261009T230000Z/); // default 1h
+  assert.match(ics, /SUMMARY:Pizza\\, boba/);
+  assert.match(ics, /END:VCALENDAR\r\n$/);
+});
+
+test('http: healthz open, ingest needs token, events served as JSON', async () => {
+  const srv = http.createServer((q, s) => handle(q, s).catch(e => { s.statusCode = 500; s.end(String(e)); }));
+  await new Promise<void>(r => srv.listen(0, r));
+  const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+  try {
+    assert.equal(((await (await fetch(`${base}/healthz`)).json()) as { ok: boolean }).ok, true);
+    assert.equal((await fetch(`${base}/ingest`, { method: 'POST', body: 'x' })).status, 401);
+    const optOut = `Message-ID: <h@mit.edu>\r\nFrom: Housing <housing@mit.edu>\r\nTo: nathan@mit.edu\r\nSubject: Housing lottery\r\n\r\nlottery results posted. dormsoup-ignore\r\n`;
+    const r = await fetch(`${base}/ingest`, { method: 'POST', headers: { authorization: 'Bearer test-token' }, body: optOut });
+    assert.deepEqual(await r.json(), { skipped: 'opted-out' });
+    // envelope sender outside mit.edu (set by the Cloudflare worker) is ignored before parsing
+    const r2 = await fetch(`${base}/ingest`, { method: 'POST', headers: { authorization: 'Bearer test-token', 'x-envelope-from': 'spammer@example.com' }, body: dormspam('Free pizza', "free pizza now in 10-250\nbcc'd to dorms", '<spam@example.com>') });
+    assert.equal(r2.status, 202);
+    const all = (await (await fetch(`${base}/api/events?start=2026-10-09T00:00:00Z&end=2026-10-10T00:00:00Z`)).json()) as Record<string, unknown>[];
+    const ev = all.filter(e => e.title === 'Free pizza — Hack Night'); // other tests add relative-dated events
+    assert.equal(ev.length, 1);
+    assert.equal(ev[0].sender, 'Jane Doe'); // public site: display name only, no address or internal ids
+    assert.equal(ev[0].message_id, undefined);
+    assert.match(await (await fetch(`${base}/calendar.ics`)).text(), /BEGIN:VEVENT/);
+    const home = await fetch(`${base}/`);
+    assert.match(await home.text(), /Free Foods @ MIT/);
+    assert.match(home.headers.get('content-security-policy') || '', /default-src 'none'/);
+    assert.equal((await fetch(`${base}/style.css`)).headers.get('content-type'), 'text/css; charset=utf-8');
+    assert.equal((await fetch(`${base}/icons/pizza.svg`)).status, 200);
+    assert.equal((await fetch(`${base}/icons/../server.ts`)).status, 404);
+  } finally { srv.close(); }
+});

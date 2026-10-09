@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Free Foods @ MIT</title>
+<meta name="description" content="Calendar of free food at MIT, read out of dormspam and the free-foods@mit.edu list.">
+<link rel="icon" href="/icons/pizza.svg">
+<link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+<script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.js" integrity="sha384-B1OFx8Gy9GjPu8UbUyXbGQpzll9ubAUQ9agInFJ8NnD7nYG1u/CLR+Sqr5yifl4q" crossorigin="anonymous"></script>
+<script src="/app.js" defer></script>
+</head>
+<body class="desktop">
+
+<div class="desktop-icons">
+  <button class="desktop-icon" data-app-open="calendar"><img src="/icons/calendar.svg" alt=""><span class="icon-label">Calendar</span></button>
+  <button class="desktop-icon" data-app-open="now"><img src="/icons/pizza.svg" alt=""><span class="icon-label">Right Now</span></button>
+  <a class="desktop-icon" href="/calendar.ics" data-ics><img src="/icons/disk.svg" alt=""><span class="icon-label">Subscribe</span></a>
+  <button class="desktop-icon" data-app-open="about"><img src="/icons/help.svg" alt=""><span class="icon-label">About</span></button>
+</div>
+
+<div class="window app-window" id="calendarWin" hidden>
+  <div class="titlebar">
+    <img class="titlebar-icon-img" src="/icons/calendar.svg" alt="">
+    <span class="titlebar-text">Free Foods @ MIT - Calendar</span>
+    <span class="titlebar-buttons">
+      <button data-win="min" aria-label="minimize">_</button>
+      <button data-win="max" aria-label="maximize">▢</button>
+      <button data-win="close" aria-label="close">✕</button>
+    </span>
+  </div>
+  <div class="menubar">
+    <div class="menu" data-menu><span>File</span>
+      <div class="dropdown">
+        <a href="/calendar.ics" data-ics>Subscribe (.ics)…</a>
+        <button data-action="refresh">Refresh<span class="shortcut">F5</span></button>
+        <hr>
+        <a href="/auth/logout" data-logout hidden>Log out</a>
+        <button data-win-close="calendar">Close</button>
+      </div>
+    </div>
+    <div class="menu" data-menu><span>View</span>
+      <div class="dropdown">
+        <button data-view="dayGridMonth">Month</button>
+        <button data-view="timeGridWeek">Week</button>
+        <button data-view="listWeek">List</button>
+        <hr>
+        <button data-action="today">Today</button>
+        <button data-app-open="now">Right Now…</button>
+      </div>
+    </div>
+    <div class="menu" data-menu><span>Help</span>
+      <div class="dropdown"><button data-app-open="about">About Free Foods…</button></div>
+    </div>
+    <span class="menubar-spacer"></span>
+    <span class="userchip" id="who"></span>
+  </div>
+  <div class="toolbar">
+    <button class="tb-btn" data-action="prev" title="Previous">◀</button>
+    <button class="tb-btn" data-action="next" title="Next">▶</button>
+    <button class="tb-btn" data-action="today">Today</button>
+    <span class="sep"></span>
+    <button class="tb-btn" data-view="dayGridMonth">Month</button>
+    <button class="tb-btn" data-view="timeGridWeek">Week</button>
+    <button class="tb-btn" data-view="listWeek">List</button>
+    <span class="spacer"></span>
+    <span class="view-title" id="viewTitle"></span>
+  </div>
+  <div class="sunken"><div id="cal"></div></div>
+  <div class="statusbar">
+    <span id="status">Loading…</span>
+    <span id="nowStatus">Right now: 0</span>
+    <span>dormspam + free-foods@mit.edu</span>
+  </div>
+</div>
+
+<div class="window app-window" id="nowWin" hidden>
+  <div class="titlebar">
+    <img class="titlebar-icon-img" src="/icons/pizza.svg" alt="">
+    <span class="titlebar-text">Right Now</span>
+    <span class="titlebar-buttons">
+      <button data-win="min" aria-label="minimize">_</button>
+      <button data-win="max" aria-label="maximize">▢</button>
+      <button data-win="close" aria-label="close">✕</button>
+    </span>
+  </div>
+  <div class="sunken"><ul class="now-list" id="nowList"><li class="empty">Loading…</li></ul></div>
+  <div class="statusbar"><span>Food that is out now or starts within the hour. Click one for details.</span></div>
+</div>
+
+<div class="window app-window" id="aboutWin" hidden>
+  <div class="titlebar">
+    <img class="titlebar-icon-img" src="/icons/help.svg" alt="">
+    <span class="titlebar-text">About Free Foods</span>
+    <span class="titlebar-buttons">
+      <button data-win="min" aria-label="minimize">_</button>
+      <button data-win="max" aria-label="maximize">▢</button>
+      <button data-win="close" aria-label="close">✕</button>
+    </span>
+  </div>
+  <div class="about">
+    <div class="hero"><img src="/icons/pizza.svg" alt=""><div><h1>Free Foods @ MIT</h1><div>Version 98</div></div></div>
+    <p>Every dormspam and free-foods@mit.edu email is read by Claude, flyer photos and PDFs included, and anything with free food lands on the calendar. Orange means it is out right now. Times and rooms can be wrong.</p>
+    <p>Subscribe in Google or Apple Calendar: <code id="icsUrl">/calendar.ics</code></p>
+    <p>Senders can keep an email off the calendar by writing <code>dormsoup-ignore</code> in it.</p>
+    <div class="dialog-row buttons"><button class="btn-default" data-win-close="about">OK</button></div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="backdrop" hidden>
+  <div class="window dialog">
+    <div class="titlebar">
+      <img class="titlebar-icon-img" src="/icons/pizza.svg" alt="">
+      <span class="titlebar-text" id="dlgTitle">Event</span>
+      <span class="titlebar-buttons"><button data-dlg-close aria-label="close">✕</button></span>
+    </div>
+    <div class="dialog-body" id="dlgBody"></div>
+    <div class="dialog-row buttons dialog-foot"><button class="btn-default" data-dlg-close>OK</button></div>
+  </div>
+</div>
+
+<div class="start-menu" id="startMenu" hidden>
+  <div class="side">Free Foods 98</div>
+  <div class="items">
+    <button data-app-open="calendar"><img src="/icons/calendar.svg" alt=""> Calendar</button>
+    <button data-app-open="now"><img src="/icons/pizza.svg" alt=""> Right Now</button>
+    <a href="/calendar.ics" data-ics><img src="/icons/disk.svg" alt=""> Subscribe (.ics)</a>
+    <button data-app-open="about"><img src="/icons/help.svg" alt=""> About</button>
+    <hr>
+    <a href="/auth/logout" data-logout hidden><img src="/icons/help.svg" alt=""> Log out</a>
+  </div>
+</div>
+
+<div class="taskbar">
+  <button class="start-btn" id="startBtn"><img src="/icons/pizza.svg" alt=""> Start</button>
+  <span class="task-buttons" id="taskButtons"></span>
+  <span class="clock" id="clock"></span>
+</div>
+</body>
+</html>
